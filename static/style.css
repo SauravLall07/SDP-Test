@@ -57,6 +57,8 @@ input, select, textarea { width: 100%; border: 1px solid var(--line); border-rad
 textarea { resize: vertical; font-family: "DM Mono", monospace; }
 input:focus, select:focus, textarea:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(20,91,58,.09); }
 .date-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.date-grid label { min-width: 0; }
+.date-grid input[type="date"] { min-width: 0; padding: 10px 6px; }
 .hint { color: var(--muted); font-size: 11px; line-height: 1.5; }
 .divider { height: 1px; margin: 17px 0; background: var(--line); }
 .repo-state { margin: -6px 0 15px; padding: 8px 10px; border-radius: 7px; background: #eff1eb; color: var(--muted); font-size: 11px; }
