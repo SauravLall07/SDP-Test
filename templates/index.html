@@ -54,9 +54,35 @@
           <article class="metric-card accent-gold"><span>Total churn</span><strong id="metric-churn">—</strong><small>added + removed</small></article>
         </section>
 
+        <section class="insight-strip">
+          <div class="chip"><small>Bus factor · 50% churn</small><strong id="chip-bus-factor">—</strong></div>
+          <div class="chip"><small>Ownership Gini</small><strong id="chip-gini">—</strong></div>
+          <div class="chip"><small>Authors for 80% churn</small><strong id="chip-owners80">—</strong></div>
+          <div class="chip"><small>Files for 80% churn</small><strong id="chip-files80">—</strong></div>
+          <div class="chip"><small>Churn trend</small><strong id="chip-trend">—</strong></div>
+        </section>
+
         <section class="chart-grid">
           <article class="panel chart-card"><div class="section-heading"><span>Most volatile objects</span><small>Churn by path</small></div><div id="churn-chart" class="bar-chart"></div></article>
-          <article class="panel chart-card"><div class="section-heading"><span>Ownership</span><small id="ownership-focus">Repository root</small></div><div id="ownership-chart" class="ownership-chart"></div></article>
+          <article class="panel chart-card"><div class="section-heading"><span>Ownership</span><small id="ownership-focus">Repository root</small></div><div id="ownership-chart" class="ownership-chart"></div>
+            <div class="section-heading sub-heading"><span>Churn concentration</span><small>Ranked files → cumulative share</small></div><div id="pareto-chart" class="pareto-chart"></div>
+          </article>
+        </section>
+
+        <section class="panel chart-card timeline-card">
+          <div class="section-heading"><span>Change timeline</span><div class="segmented" id="bucket-toggle"><button type="button" data-bucket="week" class="active">Weekly</button><button type="button" data-bucket="month">Monthly</button></div></div>
+          <div id="timeline-chart" class="timeline-chart"></div>
+          <div class="chart-legend">
+            <span><i class="legend-swatch swatch-added"></i>Added</span>
+            <span><i class="legend-swatch swatch-removed"></i>Removed</span>
+            <span><i class="legend-swatch swatch-cumulative"></i>Cumulative net</span>
+            <span><i class="legend-swatch swatch-trend"></i>Churn trend</span>
+          </div>
+        </section>
+
+        <section class="chart-grid">
+          <article class="panel chart-card"><div class="section-heading"><span>Volatility hotspots</span><small>Churn vs modification frequency · click a point</small></div><div id="scatter-chart" class="scatter-chart"></div></article>
+          <article class="panel chart-card"><div class="section-heading"><span>Co-change coupling</span><small>Shared commits among top files</small></div><div id="coupling-chart" class="coupling-chart"></div><div id="coupling-pairs" class="coupling-pairs"></div></article>
         </section>
 
         <section class="panel table-card">

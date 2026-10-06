@@ -9,6 +9,16 @@ from pathlib import Path
 from app import create_app
 from rat.db import connect, initialize
 from rat.git_analyzer import analyze_repository
+from rat.metrics import (
+    association_metrics,
+    bus_factor,
+    coverage,
+    gini,
+    hhi,
+    hotspot_table,
+    linear_trend,
+    pareto_curve,
+)
 
 
 def git(repository: Path, *arguments: str, env: dict[str, str] | None = None) -> str:
@@ -149,6 +159,49 @@ class RatTestCase(unittest.TestCase):
         self.assertEqual(payload["objects"][0]["modification_frequency"], 1)
         self.assertEqual(payload["objects"][0]["churn_rate"], 1)
 
+    def test_metric_endpoints_timeline_insights_and_coupling(self) -> None:
+        app = create_app(str(self.data), testing=True)
+        client = app.test_client()
+
+        timeline = client.get(f"/api/repositories/{self.repository_id}/timeline").get_json()
+        self.assertEqual(timeline["bucket"], "week")
+        self.assertEqual(len(timeline["points"]), 1)
+        week = timeline["points"][0]
+        self.assertEqual((week["commits"], week["added"], week["removed"]), (6, 5, 1))
+        self.assertEqual(week["cumulative_net"], 4)
+        self.assertEqual(timeline["trend"]["n"], 1)
+
+        monthly = client.get(
+            f"/api/repositories/{self.repository_id}/timeline", query_string={"bucket": "month"}
+        ).get_json()
+        self.assertEqual(len(monthly["points"]), 1)
+        self.assertEqual(len(monthly["points"][0]["label"]), 7)
+        self.assertEqual(monthly["points"][0]["added"], 5)
+
+        authors = client.get(f"/api/repositories/{self.repository_id}/authors").get_json()
+        alice = next(author for author in authors if author["name"] == "Alice")
+        scoped = client.get(
+            f"/api/repositories/{self.repository_id}/timeline", query_string={"author_id": alice["id"]}
+        ).get_json()
+        self.assertEqual(scoped["points"][0]["commits"], 4)
+
+        insights = client.get(f"/api/repositories/{self.repository_id}/insights").get_json()
+        self.assertEqual(insights["total_commits"], 6)
+        self.assertEqual(insights["authors"]["items"], 2)
+        self.assertAlmostEqual(insights["authors"]["gini"], 1 / 3, places=4)
+        self.assertEqual(insights["authors"]["bus_factor"], 1)
+        self.assertEqual(insights["files"]["coverage_80"]["items"], 3)
+        self.assertEqual(insights["hotspots"][0]["churn"], 2)
+
+        coupling = client.get(f"/api/repositories/{self.repository_id}/coupling").get_json()
+        self.assertEqual(len(coupling["files"]), 4)
+        self.assertIn("pairs", coupling)
+
+        bad_bucket = client.get(
+            f"/api/repositories/{self.repository_id}/timeline", query_string={"bucket": "hour"}
+        )
+        self.assertEqual(bad_bucket.status_code, 400)
+
     def test_manual_author_merge(self) -> None:
         app = create_app(str(self.data), testing=True)
         client = app.test_client()
@@ -163,6 +216,57 @@ class RatTestCase(unittest.TestCase):
         merged = client.get(f"/api/repositories/{self.repository_id}/authors").get_json()
         self.assertEqual(len(merged), 1)
         self.assertEqual(merged[0]["commits"], 6)
+
+
+class MetricsTestCase(unittest.TestCase):
+    def test_gini_coefficient(self) -> None:
+        self.assertEqual(gini([]), 0)
+        self.assertEqual(gini([1, 1, 1, 1]), 0)
+        self.assertAlmostEqual(gini([0, 10]), 0.5)
+        self.assertAlmostEqual(gini(list(range(1, 11))), 0.3)
+
+    def test_herfindahl_hirschman_index(self) -> None:
+        self.assertEqual(hhi([]), 0)
+        self.assertEqual(hhi([5]), 1)
+        self.assertAlmostEqual(hhi([1, 1, 1, 1]), 0.25)
+        self.assertAlmostEqual(hhi([2, 2]), 0.5)
+
+    def test_bus_factor_and_coverage(self) -> None:
+        self.assertEqual(bus_factor([]), 0)
+        self.assertEqual(bus_factor([5, 3, 2]), 1)
+        self.assertEqual(bus_factor([1, 1, 1, 1]), 2)
+        self.assertEqual(bus_factor([1, 1, 1, 1, 1]), 3)
+        self.assertEqual(coverage([8, 1, 1], 0.8), {"items": 1, "total_items": 3, "share": 1 / 3})
+        self.assertEqual(coverage([2, 2, 1, 1], 0.8)["items"], 3)
+
+    def test_pareto_curve_is_monotonic(self) -> None:
+        curve = pareto_curve([4, 3, 2, 1], points=2)
+        self.assertEqual(curve, [[0.0, 0.0], [0.5, 0.7], [1.0, 1.0]])
+        self.assertEqual(pareto_curve([], points=2), [[0.0, 0.0], [1.0, 0.0]])
+
+    def test_linear_trend(self) -> None:
+        trend = linear_trend([1, 2, 3, 4])
+        self.assertAlmostEqual(trend["slope"], 1.0)
+        self.assertAlmostEqual(trend["intercept"], 1.0)
+        self.assertAlmostEqual(trend["r2"], 1.0)
+        flat = linear_trend([2, 2, 2])
+        self.assertEqual((flat["slope"], flat["r2"]), (0.0, 0.0))
+        self.assertEqual(linear_trend([])["n"], 0)
+
+    def test_association_metrics(self) -> None:
+        result = association_metrics(6, 10, 12, 50)
+        self.assertAlmostEqual(result["confidence"], 0.6)
+        self.assertAlmostEqual(result["lift"], 2.5)
+        self.assertAlmostEqual(result["support"], 0.12)
+        self.assertEqual(association_metrics(0, 10, 12, 50)["lift"], 0.0)
+
+    def test_hotspot_ranking(self) -> None:
+        ranked = hotspot_table([
+            {"path": "a", "churn": 4, "churn_rate": 1.0, "modification_frequency": 0.3},
+            {"path": "b", "churn": 9, "churn_rate": 2.0, "modification_frequency": 0.5},
+        ])
+        self.assertEqual([item["path"] for item in ranked], ["b", "a"])
+        self.assertAlmostEqual(ranked[0]["score"], 1.0)
 
 
 if __name__ == "__main__":

@@ -2,14 +2,113 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request
 
 from rat.db import connect, initialize
+from rat.metrics import (
+    association_metrics,
+    concentration_report,
+    hotspot_table,
+    linear_trend,
+    pareto_curve,
+)
 from rat.services import RepositoryService
 
 BASE_DIR = Path(__file__).resolve().parent
+
+
+def commit_filter(request, repository_id: int) -> tuple[str, list[object]]:
+    """Commit-level filters shared by every analytics endpoint.
+
+    A manual commit set takes precedence over the date range, mirroring the
+    documented front-end behaviour.
+    """
+    clauses = ["c.repository_id=?"]
+    parameters: list[object] = [repository_id]
+    commit_shas = [value for value in request.args.get("commits", "").split(",") if value]
+    if commit_shas:
+        placeholders = ",".join("?" for _ in commit_shas)
+        clauses.append(f"c.sha IN ({placeholders})")
+        parameters.extend(commit_shas)
+    else:
+        start = request.args.get("start", type=int)
+        end = request.args.get("end", type=int)
+        if start is not None:
+            clauses.append("c.committer_date>=?")
+            parameters.append(start)
+        if end is not None:
+            clauses.append("c.committer_date<?")
+            parameters.append(end)
+    author_id = request.args.get("author_id", type=int)
+    if author_id is not None:
+        clauses.append("c.author_id=?")
+        parameters.append(author_id)
+    return " AND ".join(clauses), parameters
+
+
+def object_filter(request) -> tuple[str, list[object], str, str]:
+    """Path/kind focus filters mirrored by object-level analytics."""
+    clauses: list[str] = []
+    parameters: list[object] = []
+    path = request.args.get("path", "").strip()
+    kind = request.args.get("kind", "").strip()
+    if path:
+        clauses.append("ch.path=?")
+        parameters.append(path)
+    if kind in {"file", "directory"}:
+        clauses.append("ch.kind=?")
+        parameters.append(kind)
+    return (" AND " + " AND ".join(clauses) if clauses else ""), parameters, path, kind
+
+
+def week_frames(commit_rows, churn_rows) -> list[tuple[str, int, int, int, int]]:
+    """Continuous weekly frames (label, start, commits, added, removed) covering empty weeks.
+
+    Buckets are integer week indexes anchored to Monday: epoch day 0 is a
+    Thursday, so ``(day + 3) / 7`` numbers weeks starting on Monday 1970-01-05.
+    """
+    buckets = sorted({row["bucket"] for row in commit_rows} | {row["bucket"] for row in churn_rows})
+    if not buckets:
+        return []
+    commits = {row["bucket"]: row["commits"] for row in commit_rows}
+    churn = {row["bucket"]: (row["added"] or 0, row["removed"] or 0) for row in churn_rows}
+    frames = []
+    for bucket in range(buckets[0], buckets[-1] + 1):
+        start = (bucket * 7 - 3) * 86400
+        label = datetime.fromtimestamp(start, timezone.utc).date().isoformat()
+        added, removed = churn.get(bucket, (0, 0))
+        frames.append((label, start, commits.get(bucket, 0), added, removed))
+    return frames
+
+
+def month_frames(commit_rows, churn_rows) -> list[tuple[str, int, int, int, int]]:
+    """Continuous monthly frames (label, start, commits, added, removed) covering empty months."""
+    labels = sorted({row["bucket"] for row in commit_rows} | {row["bucket"] for row in churn_rows})
+    if not labels:
+        return []
+    commits = {row["bucket"]: row["commits"] for row in commit_rows}
+    churn = {row["bucket"]: (row["added"] or 0, row["removed"] or 0) for row in churn_rows}
+    frames = []
+    for label in month_sequence(labels[0], labels[-1]):
+        year, month = (int(part) for part in label.split("-"))
+        start = int(datetime(year, month, 1, tzinfo=timezone.utc).timestamp())
+        added, removed = churn.get(label, (0, 0))
+        frames.append((label, start, commits.get(label, 0), added, removed))
+    return frames
+
+
+def month_sequence(start: str, end: str) -> list[str]:
+    """Ordered list of ``YYYY-MM`` labels from ``start`` to ``end`` inclusive."""
+    year, month = (int(part) for part in start.split("-"))
+    end_year, end_month = (int(part) for part in end.split("-"))
+    labels = []
+    while (year, month) <= (end_year, end_month):
+        labels.append(f"{year:04d}-{month:02d}")
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return labels
 
 
 def create_app(data_dir: str | None = None, testing: bool = False) -> Flask:
@@ -158,38 +257,8 @@ def create_app(data_dir: str | None = None, testing: bool = False) -> Flask:
 
     @app.get("/api/repositories/<int:repository_id>/analytics")
     def analytics(repository_id: int):
-        clauses = ["c.repository_id=?"]
-        parameters: list[object] = [repository_id]
-        commit_shas = [value for value in request.args.get("commits", "").split(",") if value]
-        author_id = request.args.get("author_id", type=int)
-        if commit_shas:
-            placeholders = ",".join("?" for _ in commit_shas)
-            clauses.append(f"c.sha IN ({placeholders})")
-            parameters.extend(commit_shas)
-        else:
-            start = request.args.get("start", type=int)
-            end = request.args.get("end", type=int)
-            if start is not None:
-                clauses.append("c.committer_date>=?")
-                parameters.append(start)
-            if end is not None:
-                clauses.append("c.committer_date<?")
-                parameters.append(end)
-        if author_id is not None:
-            clauses.append("c.author_id=?")
-            parameters.append(author_id)
-        where = " AND ".join(clauses)
-        path = request.args.get("path", "").strip()
-        kind = request.args.get("kind", "").strip()
-        object_clauses: list[str] = []
-        object_parameters: list[object] = []
-        if path:
-            object_clauses.append("ch.path=?")
-            object_parameters.append(path)
-        if kind in {"file", "directory"}:
-            object_clauses.append("ch.kind=?")
-            object_parameters.append(kind)
-        object_where = " AND " + " AND ".join(object_clauses) if object_clauses else ""
+        where, parameters = commit_filter(request, repository_id)
+        object_where, object_parameters, path, kind = object_filter(request)
 
         with database() as connection:
             repository = connection.execute(
@@ -253,6 +322,163 @@ def create_app(data_dir: str | None = None, testing: bool = False) -> Flask:
             authors=authors_result,
             focus={"path": focus_path, "kind": focus_kind},
         )
+
+    @app.get("/api/repositories/<int:repository_id>/timeline")
+    def timeline(repository_id: int):
+        bucket = request.args.get("bucket", "week").strip().lower()
+        if bucket not in {"week", "month"}:
+            raise ValueError("Bucket must be 'week' or 'month'")
+        where, parameters = commit_filter(request, repository_id)
+        object_where, object_parameters, _path, _kind = object_filter(request)
+        if bucket == "week":
+            key = "((c.committer_date / 86400) + 3) / 7"
+            frames = week_frames
+        else:
+            key = "strftime('%Y-%m', c.committer_date, 'unixepoch')"
+            frames = month_frames
+        with database() as connection:
+            if object_where:
+                # Inside a path/kind focus a bucket only counts the commits that touch the scope.
+                rows = connection.execute(
+                    f"""SELECT {key} AS bucket, COUNT(DISTINCT c.id) AS commits,
+                               SUM(ch.added) AS added, SUM(ch.removed) AS removed
+                        FROM changes ch JOIN commits c ON c.id=ch.commit_id
+                        WHERE {where} {object_where}
+                        GROUP BY bucket ORDER BY bucket""",
+                    [*parameters, *object_parameters],
+                ).fetchall()
+                timeline_rows = frames(rows, rows)
+            else:
+                commit_rows = connection.execute(
+                    f"""SELECT {key} AS bucket, COUNT(*) AS commits
+                        FROM commits c WHERE {where} GROUP BY bucket ORDER BY bucket""",
+                    parameters,
+                ).fetchall()
+                churn_rows = connection.execute(
+                    # kind='file' keeps the series at the canonical unit: directory
+                    # rows are rollups of the same lines and would double count.
+                    f"""SELECT {key} AS bucket, SUM(ch.added) AS added, SUM(ch.removed) AS removed
+                        FROM changes ch JOIN commits c ON c.id=ch.commit_id
+                        WHERE {where} AND ch.kind='file' GROUP BY bucket ORDER BY bucket""",
+                    parameters,
+                ).fetchall()
+                timeline_rows = frames(commit_rows, churn_rows)
+        points = []
+        cumulative = 0
+        for label, start, commits, added, removed in timeline_rows:
+            net = added - removed
+            cumulative += net
+            points.append({
+                "label": label,
+                "start": start,
+                "commits": commits,
+                "added": added,
+                "removed": removed,
+                "churn": added + removed,
+                "net": net,
+                "cumulative_net": cumulative,
+            })
+        return jsonify(bucket=bucket, points=points, trend=linear_trend([point["churn"] for point in points]))
+
+    @app.get("/api/repositories/<int:repository_id>/insights")
+    def insights(repository_id: int):
+        where, parameters = commit_filter(request, repository_id)
+        with database() as connection:
+            total_commits = connection.execute(
+                f"SELECT COUNT(*) FROM commits c WHERE {where}", parameters
+            ).fetchone()[0]
+            author_rows = connection.execute(
+                f"""SELECT a.id, a.name, SUM(ch.added + ch.removed) AS churn
+                    FROM changes ch JOIN commits c ON c.id=ch.commit_id
+                    JOIN authors a ON a.id=c.author_id
+                    WHERE {where} AND ch.kind='file'
+                    GROUP BY a.id""",
+                parameters,
+            ).fetchall()
+            file_rows = connection.execute(
+                f"""SELECT ch.path, SUM(ch.added) AS added, SUM(ch.removed) AS removed,
+                           SUM(ch.added + ch.removed) AS churn, COUNT(DISTINCT c.id) AS modifications
+                    FROM changes ch JOIN commits c ON c.id=ch.commit_id
+                    WHERE {where} AND ch.kind='file'
+                    GROUP BY ch.path""",
+                parameters,
+            ).fetchall()
+        author_churn = [row["churn"] for row in author_rows]
+        file_churn = [row["churn"] for row in file_rows]
+        files = [
+            {
+                "path": row["path"],
+                "churn": row["churn"],
+                "modifications": row["modifications"],
+                "modification_frequency": row["modifications"] / total_commits if total_commits else 0.0,
+                "churn_rate": row["churn"] / total_commits if total_commits else 0.0,
+            }
+            for row in file_rows
+        ]
+        return jsonify(
+            total_commits=total_commits,
+            authors=concentration_report(author_churn),
+            files=concentration_report(file_churn),
+            pareto_curve=pareto_curve(file_churn),
+            hotspots=hotspot_table(files),
+        )
+
+    @app.get("/api/repositories/<int:repository_id>/coupling")
+    def coupling(repository_id: int):
+        limit = min(max(request.args.get("limit", 10, type=int), 4), 12)
+        where, parameters = commit_filter(request, repository_id)
+        files: list[dict] = []
+        pairs: list[dict] = []
+        with database() as connection:
+            total_commits = connection.execute(
+                f"SELECT COUNT(*) FROM commits c WHERE {where}", parameters
+            ).fetchone()[0]
+            top_rows = connection.execute(
+                f"""SELECT ch.path, SUM(ch.added + ch.removed) AS churn
+                    FROM changes ch JOIN commits c ON c.id=ch.commit_id
+                    WHERE {where} AND ch.kind='file'
+                    GROUP BY ch.path ORDER BY churn DESC, ch.path LIMIT ?""",
+                [*parameters, limit],
+            ).fetchall()
+            paths = [row["path"] for row in top_rows]
+            if len(paths) >= 2 and total_commits:
+                placeholders = ",".join("?" for _ in paths)
+                commit_rows = connection.execute(
+                    f"""SELECT ch.path, COUNT(DISTINCT c.id) AS commits
+                        FROM changes ch JOIN commits c ON c.id=ch.commit_id
+                        WHERE {where} AND ch.kind='file' AND ch.path IN ({placeholders})
+                        GROUP BY ch.path""",
+                    [*parameters, *paths],
+                ).fetchall()
+                # Candidate pruning: the self-join only pairs the top churn files, which
+                # bounds the work a repository-wide pair scan would blow up on hot commits.
+                pair_rows = connection.execute(
+                    f"""SELECT a.path AS path_a, b.path AS path_b, COUNT(DISTINCT a.commit_id) AS together
+                        FROM changes a
+                        JOIN changes b ON b.commit_id=a.commit_id AND b.kind='file' AND a.path<b.path
+                        JOIN commits c ON c.id=a.commit_id
+                        WHERE a.kind='file' AND {where}
+                          AND a.path IN ({placeholders}) AND b.path IN ({placeholders})
+                        GROUP BY a.path, b.path HAVING together >= 2
+                        ORDER BY together DESC, a.path, b.path LIMIT 300""",
+                    [*parameters, *paths, *paths],
+                ).fetchall()
+                commits_by_path = {row["path"]: row["commits"] for row in commit_rows}
+                for row in pair_rows:
+                    metrics = association_metrics(
+                        row["together"],
+                        commits_by_path.get(row["path_a"], 0),
+                        commits_by_path.get(row["path_b"], 0),
+                        total_commits,
+                    )
+                    if metrics["lift"] >= 1.0:
+                        pairs.append({"a": row["path_a"], "b": row["path_b"], **metrics})
+                pairs.sort(key=lambda item: (item["together"], item["lift"]), reverse=True)
+                files = [
+                    {"path": row["path"], "churn": row["churn"], "commits": commits_by_path.get(row["path"], 0)}
+                    for row in top_rows
+                ]
+        return jsonify(files=files, pairs=pairs[: limit * 3], total_commits=total_commits)
 
     return app
 
