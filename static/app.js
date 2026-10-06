@@ -452,6 +452,17 @@ function openRepositoryDialog() { $("#repository-dialog").showModal(); }
 $("#add-repo-button").addEventListener("click", openRepositoryDialog);
 document.querySelectorAll("[data-open-dialog]").forEach(button => button.addEventListener("click", openRepositoryDialog));
 $("#refresh-button").addEventListener("click", () => loadRepositories(state.selectedRepository));
+$("#delete-repo-button").addEventListener("click", async () => {
+  const repo = state.repositories.find(item => item.id === state.selectedRepository);
+  if (!repo) return;
+  if (!confirm(`Delete "${repo.name}"? This removes all data and cannot be undone.`)) return;
+  try {
+    await api(`/api/repositories/${repo.id}`, { method: "DELETE" });
+    toast(`"${repo.name}" deleted.`);
+    state.selectedRepository = null;
+    await loadRepositories();
+  } catch (error) { toast(error.message); }
+});
 $("#repository-select").addEventListener("change", event => { state.selectedRepository = Number(event.target.value); loadRepositoryData(); });
 $("#apply-filters").addEventListener("click", loadAnalytics);
 $("#bucket-toggle").addEventListener("click", event => {

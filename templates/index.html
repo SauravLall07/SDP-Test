@@ -28,7 +28,7 @@
     <section id="workspace" class="workspace hidden">
       <aside class="panel filters">
         <div class="section-heading"><span>Scope</span><button id="refresh-button" class="icon-button" title="Refresh">↻</button></div>
-        <label>Repository<select id="repository-select"></select></label>
+        <label>Repository<div class="repo-row"><select id="repository-select"></select><button id="delete-repo-button" class="icon-button danger" title="Delete repository">✕</button></div></label>
         <div id="repo-state" class="repo-state"></div>
         <label>Author<select id="author-select"><option value="">All authors</option></select></label>
         <label>File or directory<input id="path-filter" list="object-options" placeholder="/ (repository root)"><datalist id="object-options"></datalist></label>

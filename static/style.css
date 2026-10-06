@@ -60,6 +60,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--green); box-shad
 .date-grid label { min-width: 0; }
 .date-grid input[type="date"] { min-width: 0; padding: 10px 6px; }
 .hint { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.repo-row { display: flex; gap: 6px; align-items: center; }
+.repo-row select { flex: 1; min-width: 0; }
+.icon-button.danger { background: #fae8e4; color: var(--red); }
+.icon-button.danger:hover { background: #f3d1cb; }
 .divider { height: 1px; margin: 17px 0; background: var(--line); }
 .repo-state { margin: -6px 0 15px; padding: 8px 10px; border-radius: 7px; background: #eff1eb; color: var(--muted); font-size: 11px; }
 .repo-state.error { background: #fae8e4; color: #9f3127; }
