@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Explore repository churn, growth, ownership, and volatility.">
+  <title>RAT · Repository Intelligence</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#"><span class="brand-mark">R</span><span>Repo Analysis Tool</span></a>
+    <div class="top-actions"><span class="live-dot"></span><span id="system-status">Ready</span><button id="add-repo-button" class="button primary">＋ Add repository</button></div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div><p class="eyebrow">Repository intelligence</p><h1>See where your code<br><em>really changes.</em></h1></div>
+      <p class="hero-copy">Measure growth, churn, volatility, and ownership across every commit, author, file, and directory.</p>
+    </section>
+
+    <section id="empty-state" class="empty-state hidden">
+      <span class="empty-icon">⌁</span><h2>Add your first repository</h2>
+      <p>Upload a ZIP containing <code>.git</code> or deeply clone a remote URL.</p>
+      <button class="button primary" data-open-dialog>Analyze a repository</button>
+    </section>
+
+    <section id="workspace" class="workspace hidden">
+      <aside class="panel filters">
+        <div class="section-heading"><span>Scope</span><button id="refresh-button" class="icon-button" title="Refresh">↻</button></div>
+        <label>Repository<select id="repository-select"></select></label>
+        <div id="repo-state" class="repo-state"></div>
+        <label>Author<select id="author-select"><option value="">All authors</option></select></label>
+        <label>File or directory<input id="path-filter" list="object-options" placeholder="/ (repository root)"><datalist id="object-options"></datalist></label>
+        <label>Object type<select id="kind-filter"><option value="">Auto / all</option><option value="file">File</option><option value="directory">Directory</option></select></label>
+        <div class="date-grid">
+          <label>From<input id="date-start" type="date"></label>
+          <label>Until<input id="date-end" type="date"></label>
+        </div>
+        <label>Manual commit set<textarea id="commit-filter" rows="3" placeholder="Paste full commit hashes, one per line"></textarea></label>
+        <p class="hint">A manual commit set takes precedence over dates.</p>
+        <button id="apply-filters" class="button primary wide">Apply filters</button>
+        <button id="clear-filters" class="button subtle wide">Clear filters</button>
+        <div class="divider"></div>
+        <button id="merge-open" class="button outline wide">Merge author identities</button>
+      </aside>
+
+      <div class="content">
+        <div class="content-head"><div><p class="eyebrow">Current scope</p><h2 id="scope-title">Repository overview</h2></div><span id="commit-count" class="pill">0 commits</span></div>
+        <section class="metric-grid">
+          <article class="metric-card accent-green"><span>Added lines</span><strong id="metric-added">—</strong><small>Σ additions</small></article>
+          <article class="metric-card accent-red"><span>Removed lines</span><strong id="metric-removed">—</strong><small>Σ removals</small></article>
+          <article class="metric-card accent-blue"><span>Net growth</span><strong id="metric-growth">—</strong><small>added − removed</small></article>
+          <article class="metric-card accent-gold"><span>Total churn</span><strong id="metric-churn">—</strong><small>added + removed</small></article>
+        </section>
+
+        <section class="chart-grid">
+          <article class="panel chart-card"><div class="section-heading"><span>Most volatile objects</span><small>Churn by path</small></div><div id="churn-chart" class="bar-chart"></div></article>
+          <article class="panel chart-card"><div class="section-heading"><span>Ownership</span><small id="ownership-focus">Repository root</small></div><div id="ownership-chart" class="ownership-chart"></div></article>
+        </section>
+
+        <section class="panel table-card">
+          <div class="section-heading"><span>Metric explorer</span><small>Click a row to focus</small></div>
+          <div class="table-wrap"><table><thead><tr><th>Object</th><th>Type</th><th>Added</th><th>Removed</th><th>Growth</th><th>Churn</th><th>Mods</th><th>Frequency</th><th>Churn / commit</th></tr></thead><tbody id="metrics-body"></tbody></table></div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="repository-dialog">
+    <form method="dialog" class="dialog-head"><div><p class="eyebrow">New analysis</p><h2>Add repository</h2></div><button class="icon-button" value="cancel">×</button></form>
+    <div class="tabs"><button class="tab active" data-tab="clone">Clone URL</button><button class="tab" data-tab="upload">Upload ZIP</button></div>
+    <form id="clone-form" class="dialog-form"><label>Display name<input name="name" placeholder="Optional"></label><label>Remote URL<input name="url" type="url" required placeholder="https://github.com/owner/repository.git"></label><button class="button primary wide" type="submit">Clone and analyze</button></form>
+    <form id="upload-form" class="dialog-form hidden"><label>Display name<input name="name" placeholder="Optional"></label><label class="drop-zone">Repository archive<input name="archive" type="file" accept=".zip" required><span>Choose a ZIP containing a <code>.git</code> directory or file</span></label><button class="button primary wide" type="submit">Upload and analyze</button></form>
+  </dialog>
+
+  <dialog id="merge-dialog">
+    <form method="dialog" class="dialog-head"><div><p class="eyebrow">Identity resolution</p><h2>Merge authors</h2></div><button class="icon-button" value="cancel">×</button></form>
+    <form id="merge-form" class="dialog-form"><p class="hint">All commits from the source identity are reassigned to the target. Reanalysis restores identities from Git and <code>.mailmap</code>.</p><label>Source identity<select id="merge-source" required></select></label><label>Merge into<select id="merge-target" required></select></label><button class="button primary wide" type="submit">Merge identities</button></form>
+  </dialog>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</body>
+</html>
