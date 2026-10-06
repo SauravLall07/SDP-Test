@@ -103,7 +103,9 @@ class RepositoryService:
                 (path for path in candidates if self._is_work_tree(path)), None
             )
             if repository_path is None:
-                raise ValueError("The ZIP does not contain a usable .git directory or file")
+                # No .git found — synthesize a single-commit repo from the source files.
+                repository_path = self._find_content_root(target)
+                self._init_git_repo(repository_path)
             with connect(self.db_path) as connection:
                 connection.execute(
                     "UPDATE repositories SET local_path=? WHERE id=?",
@@ -120,6 +122,45 @@ class RepositoryService:
             return run_git(str(path), "rev-parse", "--is-inside-work-tree") == "true"
         except AnalysisError:
             return False
+
+    @staticmethod
+    def _find_content_root(target: Path) -> Path:
+        """Find the shallowest directory that actually contains source files.
+
+        GitHub ZIPs wrap everything in a single top-level folder like
+        ``repo-main/``.  If the target contains exactly one subdirectory
+        and no files of its own, descend into that subdirectory.
+        """
+        root = target
+        while True:
+            children = [child for child in root.iterdir() if not child.name.startswith(".")]
+            dirs = [child for child in children if child.is_dir()]
+            files = [child for child in children if child.is_file()]
+            if len(dirs) == 1 and not files:
+                root = dirs[0]
+            else:
+                break
+        return root
+
+    @staticmethod
+    def _init_git_repo(path: Path) -> None:
+        """Turn a plain directory into a single-commit Git repository."""
+        import os
+        env = {**os.environ, "LC_ALL": "C"}
+        subprocess.run(
+            ["git", "init"], cwd=str(path), stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, check=True, env=env,
+        )
+        subprocess.run(
+            ["git", "add", "."], cwd=str(path), stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, check=True, env=env,
+        )
+        subprocess.run(
+            ["git", "-c", "user.name=ZIP Upload", "-c", "user.email=upload@rat",
+             "commit", "-m", "Initial snapshot from uploaded ZIP"],
+            cwd=str(path), stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, check=True, env=env,
+        )
 
     def reanalyze(self, repository_id: int) -> None:
         with connect(self.db_path) as connection:
